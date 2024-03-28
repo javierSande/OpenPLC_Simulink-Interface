@@ -41,15 +41,24 @@ class PlcData:
 		self.digitalOut = [False] * DIGITAL_BUF_SIZE
 
 	def pack(self):
-		# Convert boolean lists to integers
-		digital_in_int = [int(bit) for bit in self.digitalIn]
-		digital_out_int = [int(bit) for bit in self.digitalOut]
+		# Pack data using struct
+		packedData = struct.pack(f'{ANALOG_BUF_SIZE}H{ANALOG_BUF_SIZE}H{DIGITAL_BUF_SIZE}?{DIGITAL_BUF_SIZE}?', *self.analogIn, *self.analogOut, *self.digitalIn, *self.digitalOut)
+		return packedData
 
-        # Pack data using struct
-		packed_data = struct.pack(f'{ANALOG_BUF_SIZE}i{ANALOG_BUF_SIZE}i{DIGITAL_BUF_SIZE}?{DIGITAL_BUF_SIZE}?', 
-							*self.analogIn, *self.analogOut, *digital_in_int, *digital_out_int)
-		return packed_data
-		
+	def unpack(self, packedData):
+		unpackedData = struct.unpack(f'{ANALOG_BUF_SIZE}H{ANALOG_BUF_SIZE}H{DIGITAL_BUF_SIZE}?{DIGITAL_BUF_SIZE}?', packedData)
+		self.analogIn = list(unpackedData[:ANALOG_BUF_SIZE])
+		self.analogOut = list(unpackedData[ANALOG_BUF_SIZE: 2 * ANALOG_BUF_SIZE])
+		self.digitalIn= list(unpackedData[2*ANALOG_BUF_SIZE:2*ANALOG_BUF_SIZE+DIGITAL_BUF_SIZE])
+		self.digitalOut= list(unpackedData[2*ANALOG_BUF_SIZE+DIGITAL_BUF_SIZE:])
+
+	def print(self):
+		print("Analog In: {}".format(self.analogIn))
+		print("Analog Out: {}".format(self.analogOut))
+		print("Digital In: {}".format(self.digitalIn))
+		print("Digital Out: {}".format(self.digitalOut))
+		print()
+
 class StationInfo:
 	def __init__(self):
 		self.ip = ""
@@ -186,7 +195,7 @@ def sendSimulinkData(stationNumber, varType, varIndex):
 		value = 1
 		value = value.to_bytes(2)
 		print("Sending to port {}".format(port))
-		bufferLock.locked()
+		bufferLock.release()
 
 		"""
 		# DEBUG
@@ -222,7 +231,7 @@ def createUDPServer(port):
 
 def receiveSimulinkData(stationNumber, varType, varIndex):
 
-	rcvData = []
+	simRcvData = []
 
 	if varType == Type.ANALOGIN:
 		port = stationsInfo[stationNumber].analogInPorts[varIndex]
@@ -232,13 +241,13 @@ def receiveSimulinkData(stationNumber, varType, varIndex):
 	simulinkSocket = createUDPServer(port)
 
 	while True:
-		rcvData = simulinkSocket.recv(BUFF_SIZE)
-		rcvDataLen = len(rcvData)
-		if rcvDataLen < 0:
+		simRcvData = simulinkSocket.recv(BUFF_SIZE)
+		simRcvDataLen = len(simRcvData)
+		if simRcvDataLen < 0:
 			print("Error receiving data on socket {}\n".format(simulinkSocket.fileno()))
 		else:
 			
-			rcvData = struct.unpack('d', rcvData)[0]
+			simRcvData = struct.unpack('d', simRcvData)[0]
 
 			""""
 			#DEBUG
@@ -247,8 +256,8 @@ def receiveSimulinkData(stationNumber, varType, varIndex):
 			"""
 			
 			bufferLock.acquire()
-			if varType == Type.DIGITALIN: stationsData[stationNumber].digitalIn[varIndex] = bool(rcvData)
-			else: stationsData[stationNumber].analogIn[varIndex] = int(rcvData)
+			if varType == Type.DIGITALIN: stationsData[stationNumber].digitalIn[varIndex] = bool(simRcvData)
+			else: stationsData[stationNumber].analogIn[varIndex] = int(simRcvData)
 			bufferLock.release()
 
 
@@ -287,7 +296,7 @@ def exchangeDataWithSimulink():
 
 			t = threading.Thread(target=sendSimulinkData, args=args)
 			t.daemon = True
-			t.start()
+			#t.start()
 
 		# receiving digital data
 		for (j, _) in enumerate(stationInfo.digitalInPorts):
@@ -326,51 +335,55 @@ def exchangeDataWithPLC(stationNumber):
 
 	while True:
 		bufferLock.acquire()
-		localBuffer = copy.deepcopy(stationsData[stationNumber])
+		dataToSend = stationsData[stationNumber].pack()
 		bufferLock.release()
 
-		# print("Sending pressure: {} to station: {}".format(localBuffer->pressure, stationNumber))
-		serverSocket.send("holamundo".encode())
-		print(localBuffer.pack())
-		dataSentLen = serverSocket.send(localBuffer.pack())
-		if dataSentLen != len(localBuffer.pack()):
+		# print("Sending data to station: {}".format(stationNumber))
+		# print(dataToSend)
+		dataSentLen = serverSocket.send(dataToSend)
+		if dataSentLen != len(dataToSend):
 			print("Error sending data on socket {}\n".format(serverSocket.fileno()))
 		else:
 			# print("Receiving data from station {}".format(stationNumber))
-			dataRcvLen = 0
+			rcvDataLen = 0
 			counter = 0
-			while dataRcvLen == 0:
-				data = serverSocket.recv(BUFF_SIZE).decode()
+			rcvData = PlcData()
+			while rcvDataLen == 0:
 				try:
-					dataRcvLen = len(data)
+					data = serverSocket.recv(BUFF_SIZE)
+					rcvDataLen = len(data)
+					rcvData.unpack(data)
 				except:
-					print("Error receiving data")
+					rcvDataLen = 0
+
+				# print(data)
+
 				counter += 1
-				if counter > 10:
+				if rcvDataLen > 10:
 					dataLen = -1
 					break
 				
-			if dataRcvLen < 0:
+			if rcvDataLen < 0:
 					print("Error receiving data on socket {}".format(serverSocket.fileno))
 			else:
 				"""
 				#DEBUG
-				print("Received data with size {}:\r".format(dataLen))
+				print("Received data with size {}:\r".format(rcvDataLen))
 				for i in range(0, ANALOG_BUF_SIZE):
-					printf("AIN[{}]: {}\t".format(i, localBuffer.analogIn[i]))
+					print("AIN[{}]: {}\t".format(i, rcvData.analogIn[i]))
 				print("\r")
 				for i in range(0, ANALOG_BUF_SIZE):
-					printf("AOUT[{}]: {}\t".format(i, localBuffer.analogOut[i]))
+					print("AOUT[{}]: {}\t".format(i, rcvData.analogOut[i]))
 				print("\r")
 				for i in range(0, DIGITAL_BUF_SIZE):
-					print("DIN[{}]: {}\t".format(i, localBuffer.digitalIn[i]))
+					print("DIN[{}]: {}\t".format(i, rcvData.digitalIn[i]))
 				print("\r")
 				for i in range(0, DIGITAL_BUF_SIZE):
-					print("DOUT[{}]: {}\t".format(i, localBuffer.digitalOut[i]))
+					print("DOUT[{}]: {}\t".format(i, rcvData.digitalOut[i]))
 				print("\r")
 				"""
 				bufferLock.acquire()
-				stationsData[stationNumber] = localBuffer
+				stationsData[stationNumber] = rcvData
 				bufferLock.release()
 
 		sleep(COMMDELAY)
