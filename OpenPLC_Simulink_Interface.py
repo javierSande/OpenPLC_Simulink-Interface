@@ -174,14 +174,12 @@ def sendSimulinkData(stationNumber, varType, varIndex):
 	# Figure out information about variable
 	if varType == Type.ANALOGOUT:
 		port = stationsInfo[stationNumber].analogOutPorts[varIndex]
-		analogOut = stationsData[stationNumber].analogOut[varIndex]
 	if varType == Type.DIGITALOUT:
 		port = stationsInfo[stationNumber].digitalOutPorts[varIndex]
-		digitalOut = stationsData[stationNumber].digitalOut[varIndex]
 
 	# Initialize Server Structures
 	try:
-		simulinkSocket.connect((socket.gethostbyname(simulink_ip), PLC_STATIONS_PORT))
+		simulinkSocket.connect((socket.gethostbyname(simulink_ip), port))
 	except socket.herror:
 		print("Error locating host {}".format(simulink_ip))
 		return
@@ -191,15 +189,18 @@ def sendSimulinkData(stationNumber, varType, varIndex):
 
 	while True:
 		bufferLock.acquire()
-		value = digitalOut if varType == Type.DIGITALOUT else analogOut
-		value = 1
-		value = value.to_bytes(2)
-		print("Sending to port {}".format(port))
+		if varType == Type.ANALOGOUT:
+			value = stationsData[stationNumber].analogOut[varIndex]
+		if varType == Type.DIGITALOUT:
+			value = int(stationsData[stationNumber].digitalOut[varIndex])
 		bufferLock.release()
+		
+		value = struct.pack(f'H', value)
 
 		"""
 		# DEBUG
 		print("Sending data type {}, station {}, index {}, value: {}".format(varType.toString(), stationNumber, varIndex, value))
+		print("Port: {}\tData {}".format(port, value))
 		"""
 
 		dataSentLen = simulinkSocket.send(value)
@@ -225,7 +226,6 @@ def createUDPServer(port):
 	print("Socket %d binded successfully on port {}!".format(serverSocket.fileno(), port))
 
 	return serverSocket
-
 
 # Thread to receive data from Simulink using UDP
 
@@ -296,7 +296,7 @@ def exchangeDataWithSimulink():
 
 			t = threading.Thread(target=sendSimulinkData, args=args)
 			t.daemon = True
-			#t.start()
+			t.start()
 
 		# receiving digital data
 		for (j, _) in enumerate(stationInfo.digitalInPorts):
@@ -325,6 +325,7 @@ def exchangeDataWithPLC(stationNumber):
 	try:
 		ip = socket.gethostbyname(stationsInfo[stationNumber].ip)
 		serverSocket.connect((ip, port))
+		print ("Server: connected with PLC")
 	except socket.herror:
 		print("Error locating host {}".format(stationsInfo[stationNumber].ip))
 	except:
@@ -353,13 +354,12 @@ def exchangeDataWithPLC(stationNumber):
 					data = serverSocket.recv(BUFF_SIZE)
 					rcvDataLen = len(data)
 					rcvData.unpack(data)
+					# print(data)
 				except:
 					rcvDataLen = 0
 
-				# print(data)
-
 				counter += 1
-				if rcvDataLen > 10:
+				if counter > 10:
 					dataLen = -1
 					break
 				
@@ -376,10 +376,10 @@ def exchangeDataWithPLC(stationNumber):
 					print("AOUT[{}]: {}\t".format(i, rcvData.analogOut[i]))
 				print("\r")
 				for i in range(0, DIGITAL_BUF_SIZE):
-					print("DIN[{}]: {}\t".format(i, rcvData.digitalIn[i]))
+					print("DIN[{}]: {}\t".format(i, int(rcvData.digitalIn[i])))
 				print("\r")
 				for i in range(0, DIGITAL_BUF_SIZE):
-					print("DOUT[{}]: {}\t".format(i, rcvData.digitalOut[i]))
+					print("DOUT[{}]: {}\t".format(i, int(rcvData.digitalOut[i])))
 				print("\r")
 				"""
 				bufferLock.acquire()
