@@ -29,7 +29,7 @@ DIGITAL_BUF_SIZE = 16
 
 COMMDELAY = 0.1
 
-simulink_ip = ''
+simulinkIp = ''
 
 PLC_STATIONS_PORT = 6668
 
@@ -120,6 +120,7 @@ def parseConfigFile():
 	global numStations
 	global stationsInfo
 	global stationsData
+	global simulinkIp
 
 	with open("interface.cfg", "r") as cfgfile:
 		for line in cfgfile:
@@ -131,7 +132,7 @@ def parseConfigFile():
 				elif line.startswith("comm_delay"):
 						comm_delay = int(getData(line,'"', '"'))
 				elif line.startswith("simulink"):
-					simulink_ip = getData(line, '"', '"')
+					simulinkIp = getData(line, '"', '"')
 
 				elif line.startswith("station"):
 						stationNumber = getStationNumber(line)
@@ -144,7 +145,7 @@ def parseConfigFile():
 		print("Configuration file loaded!")
 
 def displayInfo():
-	print("STATIONS INFO:")
+	print("\nSTATIONS INFO:")
 
 	for (i,stationInfo) in enumerate(stationsInfo):
 		print("\nStation {}:".format(i))
@@ -179,12 +180,10 @@ def sendSimulinkData(stationNumber, varType, varIndex):
 
 	# Initialize Server Structures
 	try:
-		simulinkSocket.connect((socket.gethostbyname(simulink_ip), port))
-	except socket.herror:
-		print("Error locating host {}".format(simulink_ip))
-		return
+		server = socket.gethostbyname(simulinkIp)
+		simulinkSocket.connect((server, port))
 	except:
-		print("Error binding simulink socket")
+		print("Simulink: Error locating host {}".format(simulinkIp))
 		return
 
 	while True:
@@ -197,15 +196,15 @@ def sendSimulinkData(stationNumber, varType, varIndex):
 		
 		value = struct.pack(f'H', value)
 
-		"""
+		""""
 		# DEBUG
-		print("Sending data type {}, station {}, index {}, value: {}".format(varType.toString(), stationNumber, varIndex, value))
+		print("Simulink: Sending data type {}, station {}, index {}, value: {}".format(varType.toString(), stationNumber, varIndex, value))
 		print("Port: {}\tData {}".format(port, value))
 		"""
 
 		dataSentLen = simulinkSocket.send(value)
 		if dataSentLen < 0:
-			print("Error sending data to simulink on socket {}\n".format(simulinkSocket.fileno()))
+			print("Simulink: Error sending data to simulink on socket {}\n".format(simulinkSocket.fileno()))
 
 		sleep(COMMDELAY)
 
@@ -223,7 +222,7 @@ def createUDPServer(port):
 	# Bind socket
 	serverSocket.bind(serverAddress)
 
-	print("Socket %d binded successfully on port {}!".format(serverSocket.fileno(), port))
+	print("Simulink: Socket {} binded successfully on port {}!".format(serverSocket.fileno(), port))
 
 	return serverSocket
 
@@ -238,20 +237,24 @@ def receiveSimulinkData(stationNumber, varType, varIndex):
 	if varType == Type.DIGITALIN:
 		port = stationsInfo[stationNumber].digitalInPorts[varIndex]
 
-	simulinkSocket = createUDPServer(port)
+	try:
+		simulinkSocket = createUDPServer(port)
+	except:
+		print("Simulink: Error creating UPD server")
+		return
 
 	while True:
 		simRcvData = simulinkSocket.recv(BUFF_SIZE)
 		simRcvDataLen = len(simRcvData)
 		if simRcvDataLen < 0:
-			print("Error receiving data on socket {}\n".format(simulinkSocket.fileno()))
+			print("Simulink: Error receiving data on socket {}\n".format(simulinkSocket.fileno()))
 		else:
 			
 			simRcvData = struct.unpack('d', simRcvData)[0]
 
 			""""
 			#DEBUG
-			print("Received packet from {}:{}\n".format(simulink_ip, port))
+			print("Simulink: Received packet from {}:{}".format(simulinkIp, port))
 			print("Station: {}, Type: {}, Index: {}, Size: {}, Data: {}\n".format(stationNumber, varType, varIndex, rcvDataLen, rcvData))
 			"""
 			
@@ -320,16 +323,16 @@ def exchangeDataWithPLC(stationNumber):
 		serverSocket = socket.socket(socket.AF_INET, # Internet 
 							         socket.SOCK_DGRAM) # UDP
 	except socket.error: 
-		print ("Server: error creating stream socket")	
+		print ("PLC: error creating stream socket")	
 
 	try:
 		ip = socket.gethostbyname(stationsInfo[stationNumber].ip)
 		serverSocket.connect((ip, port))
-		print ("Server: connected with PLC")
+		print ("PLC: connected with station {}".format(stationNumber))
 	except socket.herror:
-		print("Error locating host {}".format(stationsInfo[stationNumber].ip))
+		print("PLC: Error locating host {}".format(stationsInfo[stationNumber].ip))
 	except:
-		print("Error connection to station {} (ip: {})".format(stationNumber, ip))
+		print("PLC: Error connection to station {} (ip: {})".format(stationNumber, ip))
 
 	# set timeout of 100ms on receive
 	serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, (8*b'\x00')+(100000).to_bytes(8, 'little'))
@@ -343,7 +346,7 @@ def exchangeDataWithPLC(stationNumber):
 		# print(dataToSend)
 		dataSentLen = serverSocket.send(dataToSend)
 		if dataSentLen != len(dataToSend):
-			print("Error sending data on socket {}\n".format(serverSocket.fileno()))
+			print("PLC: Error sending data on socket {}\n".format(serverSocket.fileno()))
 		else:
 			# print("Receiving data from station {}".format(stationNumber))
 			rcvDataLen = 0
@@ -364,11 +367,11 @@ def exchangeDataWithPLC(stationNumber):
 					break
 				
 			if rcvDataLen < 0:
-					print("Error receiving data on socket {}".format(serverSocket.fileno))
+					print("PLC: Error receiving data on socket {}".format(serverSocket.fileno))
 			else:
 				"""
 				#DEBUG
-				print("Received data with size {}:\r".format(rcvDataLen))
+				print("PLC: Received data with size {}:\r".format(rcvDataLen))
 				for i in range(0, ANALOG_BUF_SIZE):
 					print("AIN[{}]: {}\t".format(i, rcvData.analogIn[i]))
 				print("\r")
@@ -410,13 +413,15 @@ exchangeDataWithSimulink()
 
 connectToPLCStations()
 
+sleep(2)
+
 while True:
 
 	bufferLock.acquire()
 
 	for i in range(0, numStations):
-		print("Station " + str(i) + ":")
-		print("Button: {}\tLamp: {}\n".format(int(stationsData[i].digitalIn[0]), int(stationsData[i].digitalOut[0])))
+		print("\nStation " + str(i) + ":")
+		print("Button: {}\tLamp: {}".format(int(stationsData[i].digitalIn[0]), int(stationsData[i].digitalOut[0])))
 
 	bufferLock.release()
 	sleep(3)
